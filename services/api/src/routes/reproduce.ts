@@ -18,8 +18,9 @@ reproduceRouter.post("/:id/reproduce", async (req: Request, res: Response, next:
 
     if (!bugCase.reproduction?.testFile) {
       res.status(400).json({
-        error: "Case has no testFile defined in reproduction",
-        details: "Set reproduction.testFile via PATCH /api/cases/:id first",
+        error: "Case has no trusted reproduction test",
+        code: "REPRODUCTION_TEST_REQUIRED",
+        details: "Automatic reproduction generation is not available yet; configure reproduction.testFile to use the existing workflow",
       });
       return;
     }
@@ -41,7 +42,7 @@ reproduceRouter.post("/:id/reproduce", async (req: Request, res: Response, next:
     res.status(202).json({ message: "Reproduction started", caseId: id });
 
     // ── Run Playwright asynchronously ──────────────────────────────────────
-    runTest(id, bugCase.reproduction.testFile, "before")
+    runTest(id, bugCase.reproduction.testFile, "before", bugCase.reproduction.testRoot ? { generatedTestRoot: bugCase.reproduction.testRoot } : undefined)
       .then(async (result) => {
         const fresh = readCase(id);
         if (!fresh) return;
@@ -53,7 +54,7 @@ reproduceRouter.post("/:id/reproduce", async (req: Request, res: Response, next:
 
         if (result.artifactPaths.screenshot) {
           newEvidence.push({
-            id: `ev-${id}-before-screenshot`,
+            id: `ev-${id}-${result.runId}-before-screenshot`,
             type: "screenshot",
             phase: "before",
             path: result.artifactPaths.screenshot,
@@ -64,7 +65,7 @@ reproduceRouter.post("/:id/reproduce", async (req: Request, res: Response, next:
 
         if (result.artifactPaths.trace) {
           newEvidence.push({
-            id: `ev-${id}-before-trace`,
+            id: `ev-${id}-${result.runId}-before-trace`,
             type: "trace",
             phase: "before",
             path: result.artifactPaths.trace,
@@ -75,7 +76,7 @@ reproduceRouter.post("/:id/reproduce", async (req: Request, res: Response, next:
 
         if (result.artifactPaths.resultJson) {
           newEvidence.push({
-            id: `ev-${id}-before-result`,
+            id: `ev-${id}-${result.runId}-before-result`,
             type: "result-json",
             phase: "before",
             path: result.artifactPaths.resultJson,
@@ -93,6 +94,11 @@ reproduceRouter.post("/:id/reproduce", async (req: Request, res: Response, next:
         }
 
         const testRun: TestRun = {
+          outcome: result.outcome,
+          testFingerprint: result.testFingerprint,
+          testIds: result.testIds,
+          runId: result.runId,
+          reportHash: result.reportHash,
           runAt: now,
           passed: result.passed,
           expected: fresh.reproduction?.expected ?? result.expected,
@@ -112,10 +118,10 @@ reproduceRouter.post("/:id/reproduce", async (req: Request, res: Response, next:
           afterRun: null,
           comparison: null,
         };
-        fresh.verification.beforeRun = testRun;
+        fresh.verification.beforeRun = testRun; fresh.verification.afterRun = null; fresh.verification.comparison = null; fresh.verification.status = "PENDING";
 
         // Status transition
-        if (!result.passed) {
+        if (result.outcome === "ASSERTION_FAILED") {
           fresh.status = "REPRODUCED";
         } else {
           fresh.status = "REPRODUCTION_FAILED";
